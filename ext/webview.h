@@ -2736,6 +2736,16 @@ private:
 
   // Blocks while depleting the run loop of events.
   void deplete_run_loop_event_queue() {
+    // nextEventMatchingMask: requires the OS main thread. On macOS 26+ this
+    // is enforced strictly — calling it off-main throws an ObjC exception that
+    // propagates as std::terminate. When the destructor is invoked from any
+    // thread other than the OS main thread (e.g. Crystal's preview_mt fiber
+    // pool, which parks Thread 0 and runs the app on a worker thread), skip
+    // the drain entirely. The window is already closed at this point, so
+    // skipping is safe.
+    if (!objc::msg_send<bool>("NSThread"_cls, "isMainThread"_sel)) {
+      return;
+    }
     objc::autoreleasepool arp;
     auto app = get_shared_application();
     bool done{};
