@@ -3,9 +3,13 @@ version: 0.2.5
 
 authors:
   - Ali Naqvi <syed.alinaqvi@gmail.com>
+  - Aristotelis Rapai <aristorap.dev@gmail.com>
 
 description: |
   Crystal bindings to the zserge's tiny cross-platform Webview library.
+  Fork maintained for the Lune framework — adds bind_deferred / resolve
+  for async JS bindings and Win32 webview_set_accel for menu-accelerator
+  routing through TranslateAcceleratorW.
 
 scripts:
   postinstall: make
