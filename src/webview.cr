@@ -5,6 +5,18 @@ require "./lib"
 module Webview
   VERSION = {{ `shards version "#{__DIR__}"`.chomp.stringify }}
 
+  # Spec-friendly abstraction over the methods Lune's bridge layer uses
+  # against a webview. `Webview::Webview` includes this naturally because
+  # all the methods are first-class on the class; spec fakes implement
+  # it manually so callers can be tested without spinning up a real
+  # webview (with its C state, message pump, and platform window).
+  module WebviewLike
+    abstract def bind_deferred(name : String, &block : String, Array(JSON::Any) -> Nil)
+    abstract def dispatch(&f : ->)
+    abstract def resolve(seq : String, status : Int32, result : String)
+    abstract def eval(js : String)
+  end
+
   # Window size hints
   enum SizeHints
     NONE  = 0 # Width and height are default size
@@ -48,6 +60,8 @@ module Webview
   alias JSProc = Array(JSON::Any) -> JSON::Any
 
   class Webview
+    include WebviewLike
+
     private record BindContext, w : LibWebView::T, cb : JSProc
 
     @@dispatchs = Hash(Proc(Nil), Pointer(Void)?).new
