@@ -168,14 +168,17 @@ Malformed binding payloads (non-JSON or non-array) auto-reject the JS Promise wi
 
 ### `set_accel` — Win32 menu-accelerator routing
 
-Installs an `HACCEL` on the message pump so the Win32 webview runs `TranslateAcceleratorW(window, accel, &msg)` before `TranslateMessage` / `DispatchMessageW`. Menu-shortcut keystrokes fire the menu's `WM_COMMAND` before WebView2 sees them — without this, the WV2 control swallows shortcuts like `Ctrl+P` for its own "Print PDF" behaviour.
+Installs an `HACCEL` that `TranslateAcceleratorW` examines along two paths, covering both focus states:
+
+- `run_impl`'s message pump — runs `TranslateAcceleratorW(window, accel, &msg)` before `TranslateMessage`/`DispatchMessageW`, for keystrokes that reach our `GetMessageW` (i.e. when the top-level window has keyboard focus).
+- `ICoreWebView2Controller::AcceleratorKeyPressed` event — fires when the WV2 child has focus. WV2's input pipeline never queues `WM_KEYDOWN` for our pump in that case, so the handler synthesises a `MSG` from the event's virtual key and runs `TranslateAcceleratorW` on the same table. On a match it sets `args->put_Handled(TRUE)` so WV2 doesn't act on the keystroke (e.g. open its print dialog) and `WM_COMMAND` is sent to the top-level window. Subscribed automatically inside `embed()` — embedder just calls `set_accel`.
 
 ```crystal
 wv.set_accel(haccel) # install
 wv.set_accel(nil)    # clear
 ```
 
-Caller retains ownership of the `HACCEL` (call `DestroyAcceleratorTable` when done). The Crystal call is a no-op on macOS / Linux so cross-platform code can call it unconditionally.
+Caller retains ownership of the `HACCEL` (call `DestroyAcceleratorTable` when done). The Crystal call is a no-op on macOS / Linux so cross-platform code can call it unconditionally. Pairs with `set_browser_accelerator_keys_enabled(false)` below to fully suppress WV2's built-in Ctrl+P / Ctrl+F / Ctrl+R defaults.
 
 ### `set_browser_accelerator_keys_enabled` — suppress WV2 browser shortcuts
 

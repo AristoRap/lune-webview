@@ -4098,6 +4098,79 @@ public:
   // without needing a friend declaration or wrapper.
   static HACCEL s_accel_table;
 
+  // Subscribes to ICoreWebView2Controller::AcceleratorKeyPressed so menu
+  // accelerators fire even when WV2 has keyboard focus. When the WV2
+  // child is focused, WM_KEYDOWN never reaches our message pump's
+  // GetMessageW — WV2 processes input on its own internal pipeline.
+  // The AcceleratorKeyPressed event is the WV2-supported hook: we
+  // receive the VK code, synthesize a MSG, run TranslateAcceleratorW
+  // on s_accel_table, and call put_Handled(TRUE) on match so WV2
+  // doesn't act on the keystroke (e.g. open its print dialog).
+  // Companion to set_accel; together they cover both focus cases
+  // (m_window focused → run_impl; WV2 focused → this event).
+  class accelerator_key_handler
+      : public ICoreWebView2AcceleratorKeyPressedEventHandler {
+  public:
+    explicit accelerator_key_handler(win32_edge_engine *engine)
+        : m_engine(engine) {}
+
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++m_ref; }
+    ULONG STDMETHODCALLTYPE Release() override {
+      if (m_ref > 1) return --m_ref;
+      delete this;
+      return 0;
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid,
+                                             void **ppv) override {
+      if (!ppv) return E_POINTER;
+      if (IsEqualIID(riid, __uuidof(IUnknown)) ||
+          IsEqualIID(
+              riid,
+              __uuidof(ICoreWebView2AcceleratorKeyPressedEventHandler))) {
+        *ppv = static_cast<
+            ICoreWebView2AcceleratorKeyPressedEventHandler *>(this);
+        AddRef();
+        return S_OK;
+      }
+      return E_NOINTERFACE;
+    }
+
+    HRESULT STDMETHODCALLTYPE Invoke(
+        ICoreWebView2Controller * /*sender*/,
+        ICoreWebView2AcceleratorKeyPressedEventArgs *args) override {
+      if (!args || !m_engine || !s_accel_table || !m_engine->m_window) {
+        return S_OK;
+      }
+      COREWEBVIEW2_KEY_EVENT_KIND kind;
+      if (FAILED(args->get_KeyEventKind(&kind))) return S_OK;
+      if (kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN &&
+          kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN) {
+        return S_OK;
+      }
+      UINT vk = 0;
+      if (FAILED(args->get_VirtualKey(&vk))) return S_OK;
+
+      // Synthesize the WM_(SYS)KEYDOWN that TranslateAcceleratorW expects.
+      // Matching is driven by wParam (the VK) and GetKeyState for the
+      // modifier flags — lParam isn't consulted, so 0 is fine.
+      MSG msg{};
+      msg.hwnd = m_engine->m_window;
+      msg.message = (kind == COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN)
+                        ? WM_SYSKEYDOWN
+                        : WM_KEYDOWN;
+      msg.wParam = vk;
+      msg.lParam = 0;
+      if (TranslateAcceleratorW(m_engine->m_window, s_accel_table, &msg)) {
+        args->put_Handled(TRUE);
+      }
+      return S_OK;
+    }
+
+  private:
+    std::atomic<ULONG> m_ref{1};
+    win32_edge_engine *m_engine;
+  };
+
   // Toggle WV2's built-in browser accelerators (Ctrl+P / Ctrl+F /
   // Ctrl+R / Ctrl+0 / Ctrl+- / etc.). Default is TRUE — WV2 grabs
   // the keystroke for its own UI. Setting FALSE lets the keystroke
@@ -4330,6 +4403,16 @@ private:
     if (res != S_OK) {
       return error_info{WEBVIEW_ERROR_UNSPECIFIED,
                         "put_IsStatusBarEnabled failed"};
+    }
+    // Subscribe to AcceleratorKeyPressed so menu shortcuts fire even
+    // when WV2 has keyboard focus (WM_KEYDOWN never reaches our
+    // GetMessageW pump in that case — WV2 has its own input pipeline).
+    // The handler bridges back to TranslateAcceleratorW + s_accel_table.
+    {
+      auto *accel_h = new accelerator_key_handler(this);
+      EventRegistrationToken token{};
+      m_controller->add_AcceleratorKeyPressed(accel_h, &token);
+      accel_h->Release(); // controller AddRefs on subscription
     }
     add_init_script("function(message) {\n\
   return window.chrome.webview.postMessage(message);\n\
