@@ -1,8 +1,10 @@
-[![Linux CI](https://github.com/naqvis/webview/actions/workflows/linux.yml/badge.svg)](https://github.com/naqvis/webview/actions/workflows/linux.yml)
-[![MacOSX CI](https://github.com/naqvis/webview/actions/workflows/macos.yml/badge.svg)](https://github.com/naqvis/webview/actions/workflows/macos.yml)
-[![Windows CI](https://github.com/naqvis/webview/actions/workflows/windows.yml/badge.svg)](https://github.com/naqvis/webview/actions/workflows/windows.yml)
+[![Linux CI](https://github.com/AristoRap/lune-webview/actions/workflows/linux.yml/badge.svg)](https://github.com/AristoRap/lune-webview/actions/workflows/linux.yml)
+[![MacOSX CI](https://github.com/AristoRap/lune-webview/actions/workflows/macos.yml/badge.svg)](https://github.com/AristoRap/lune-webview/actions/workflows/macos.yml)
+[![Windows CI](https://github.com/AristoRap/lune-webview/actions/workflows/windows.yml/badge.svg)](https://github.com/AristoRap/lune-webview/actions/workflows/windows.yml)
 
 # Crystal Webview
+
+> **Note:** This repository is a fork of [naqvis/webview](https://github.com/naqvis/webview) maintained for the [Lune](https://github.com/AristoRap/lune) framework. It carries a handful of additions on top of the upstream shard (see [Lune fork additions](#lune-fork-additions) below). All upstream features and documentation below are preserved as-is.
 
 Crystal language bindings for [zserge's Webview](https://github.com/zserge/webview) which is an excellent cross-platform single-header webview library for C/C++ using Gtk, Cocoa, or MSHTML/Edge, depending on the host OS.
 
@@ -48,8 +50,11 @@ Microsoft Windows:
    ```yaml
    dependencies:
      webview:
-       github: naqvis/webview
+       github: AristoRap/lune-webview
+       branch: master
    ```
+
+   To use the unmodified upstream shard instead, point at `naqvis/webview`.
 
 2. Run `shards install`
 
@@ -140,6 +145,54 @@ ui_widget = wv.native_handle(Webview::NativeHandleKind::UI_WIDGET)
 ```
 
 See the `examples/` directory for complete working examples.
+
+## Lune fork additions
+
+Beyond the upstream features listed above, this fork adds a small set of methods used by the [Lune framework](https://github.com/AristoRap/lune). All of them are no-op or generic enough to be useful in any consuming app — none of them depend on Lune itself.
+
+### `bind_deferred` — async bindings without blocking the webview thread
+
+`bind` auto-resolves the JS Promise as soon as the Crystal callback returns. `bind_deferred` splits that into two steps: the callback receives a `seq` id; the caller calls `resolve(seq, ...)` whenever the result is ready. Useful when the binding's work is genuinely async — file I/O, network, a long-running computation on another fiber — so the webview thread isn't pinned waiting for it.
+
+```crystal
+wv.bind_deferred("fetch") do |seq, args|
+  url = args[0].as_s
+  spawn do
+    response = HTTP::Client.get(url)
+    wv.resolve(seq, 0, response.body.to_json) # 0 = success
+  end
+end
+```
+
+Malformed binding payloads (non-JSON or non-array) auto-reject the JS Promise with `{"error": "webview: malformed binding payload: ..."}` rather than crashing the C callback.
+
+### `set_accel` — Win32 menu-accelerator routing
+
+Installs an `HACCEL` on the message pump so the Win32 webview runs `TranslateAcceleratorW(window, accel, &msg)` before `TranslateMessage` / `DispatchMessageW`. Menu-shortcut keystrokes fire the menu's `WM_COMMAND` before WebView2 sees them — without this, the WV2 control swallows shortcuts like `Ctrl+P` for its own "Print PDF" behaviour.
+
+```crystal
+wv.set_accel(haccel) # install
+wv.set_accel(nil)    # clear
+```
+
+Caller retains ownership of the `HACCEL` (call `DestroyAcceleratorTable` when done). The Crystal call is a no-op on macOS / Linux so cross-platform code can call it unconditionally.
+
+### `Webview::WebviewLike` — protocol for spec testability
+
+A small abstract module that `Webview::Webview` natively includes. Lets downstream consumers (e.g. a bridge layer) type their parameters against the protocol so spec fakes can be stubbed without spinning up a real webview (with its C state, message pump, and platform window).
+
+```crystal
+module Webview
+  module WebviewLike
+    abstract def bind_deferred(name : String, &block : String, Array(JSON::Any) -> Nil)
+    abstract def dispatch(&f : ->)
+    abstract def resolve(seq : String, status : Int32, result : String)
+    abstract def eval(js : String)
+  end
+end
+```
+
+A spec fake that satisfies this protocol can stand in for a real `Webview::Webview` anywhere the consumer accepts `Webview::WebviewLike`.
 
 ## Usage
 
@@ -379,7 +432,11 @@ For example, the `webview` library does not attempt to support user interaction 
 
 ## Contributing
 
-1. Fork it (<https://github.com/naqvis/webview/fork>)
+For changes that belong upstream (anything not specific to the Lune fork's additions), prefer opening the PR against the original repository: <https://github.com/naqvis/webview/fork>. The fork tracks upstream and will pick up merged changes.
+
+For changes specific to the Lune fork (anything in [Lune fork additions](#lune-fork-additions) above, or the Win32 accelerator-routing patch):
+
+1. Fork this repository (<https://github.com/AristoRap/lune-webview/fork>)
 2. Create your feature branch (`git checkout -b my-new-feature`)
 3. Commit your changes (`git commit -am 'Add some feature'`)
 4. Push to the branch (`git push origin my-new-feature`)
@@ -387,7 +444,8 @@ For example, the `webview` library does not attempt to support user interaction 
 
 ## Contributors
 
-- [Ali Naqvi](https://github.com/naqvis) - creator and maintainer
+- [Ali Naqvi](https://github.com/naqvis) — creator and maintainer of the upstream shard
+- [Aristotelis Rapai](https://github.com/AristoRap) — fork maintainer (Lune extensions)
 
 [macos-app-bundle]: https://developer.apple.com/library/archive/documentation/CoreFoundation/Conceptual/CFBundles/BundleTypes/BundleTypes.html
 [gtk]: https://docs.gtk.org/gtk3/
