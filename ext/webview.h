@@ -4077,12 +4077,15 @@ public:
   win32_edge_engine(win32_edge_engine &&other) = delete;
   win32_edge_engine &operator=(win32_edge_engine &&other) = delete;
 
-protected:
+public:
   // Optional accelerator table installed by the embedder via
   // webview_set_accel(); run_impl() routes WM_KEYDOWN through
   // TranslateAcceleratorW so menu shortcuts fire before WV2 sees them.
+  // Public so the C ABI `webview_set_accel` can assign to it directly
+  // without needing a friend declaration or wrapper.
   static HACCEL s_accel_table;
 
+protected:
   noresult run_impl() override {
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
