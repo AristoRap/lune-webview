@@ -204,6 +204,59 @@ module Webview
       @@bindings.delete(name)
     end
 
+    # Deferred-bind context. Stored in a class-level array so its boxed
+    # closure outlives the C registration — bindings live for the
+    # lifetime of the webview, so unbounded growth here is bounded by the
+    # number of bindings registered (fixed at startup for typical apps).
+    private record DeferredCtx, w : LibWebView::T, cb : Proc(String, Array(JSON::Any), Nil)
+    @@deferred_boxes = [] of Pointer(Void)
+
+    # Registers a JS-callable function but does NOT auto-call webview_return.
+    # The block receives (seq, args); call `resolve(seq, ...)` whenever
+    # the result is ready. Mirrors `bind` but splits the response into a
+    # separate step so the binding can do async work without blocking the
+    # webview thread.
+    def bind_deferred(name : String, &block : String, Array(JSON::Any) -> Nil)
+      ctx = DeferredCtx.new(@w, block)
+      boxed = Box.box(ctx)
+
+      check_error(LibWebView.bind(@w, name, ->(id, req, data) {
+        seq = String.new(id)
+        cb_ctx = Box(DeferredCtx).unbox(data)
+
+        # JSON.parse can raise if the webview sends malformed input. We
+        # must not let an exception escape a C callback — catch it here
+        # and return an error response so the JS Promise rejects cleanly.
+        args = begin
+          JSON.parse(String.new(req)).as_a
+        rescue ex
+          err = {error: "webview: malformed binding payload: #{ex.message}"}.to_json
+          LibWebView.webview_return(cb_ctx.w, seq, 1, err)
+          return
+        end
+
+        cb_ctx.cb.call(seq, args)
+      }, boxed))
+
+      @@deferred_boxes << boxed
+    end
+
+    # Send a response to a pending JS promise from `bind_deferred`.
+    # `status: 0` = success, non-zero = error. `result` must be valid JSON.
+    def resolve(seq : String, status : Int32, result : String)
+      LibWebView.webview_return(@w, seq, status, result)
+    end
+
+    # Install a Win32 HACCEL on the message pump; pass `nil` to clear.
+    # The pump runs `TranslateAcceleratorW(window, accel, &msg)` before
+    # `TranslateMessage`/`DispatchMessage` so menu shortcuts fire before
+    # the WebView2 control sees the keystroke. No-op on non-Win32 builds
+    # so the same call site is safe cross-platform. Caller retains
+    # ownership of the HACCEL.
+    def set_accel(haccel : Pointer(Void)?)
+      check_error(LibWebView.set_accel(@w, haccel || Pointer(Void).null))
+    end
+
     # Type-safe binding for 1 parameter
     def bind_typed(name : String, t1 : T1.class, &block : T1 -> R) forall T1, R
       bind(name, JSProc.new { |args|
