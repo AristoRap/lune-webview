@@ -417,6 +417,17 @@ WEBVIEW_API webview_error_t webview_return(webview_t w, const char *id,
  */
 WEBVIEW_API const webview_version_info_t *webview_version(void);
 
+/**
+ * Lune extension. Install a Win32 HACCEL on the message pump; pass NULL
+ * to clear. The pump runs TranslateAcceleratorW(window, accel, &msg)
+ * before TranslateMessage/DispatchMessage so menu shortcuts fire before
+ * the WebView2 control sees the keystroke. Caller retains ownership of
+ * the HACCEL and must DestroyAcceleratorTable when done.
+ *
+ * No-op on non-Win32 builds — same binding can be called cross-platform.
+ */
+WEBVIEW_API webview_error_t webview_set_accel(webview_t w, void *haccel);
+
 #ifdef __cplusplus
 }
 
@@ -4067,9 +4078,17 @@ public:
   win32_edge_engine &operator=(win32_edge_engine &&other) = delete;
 
 protected:
+  // Optional accelerator table installed by the embedder via
+  // webview_set_accel(); run_impl() routes WM_KEYDOWN through
+  // TranslateAcceleratorW so menu shortcuts fire before WV2 sees them.
+  static HACCEL s_accel_table;
+
   noresult run_impl() override {
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+      if (s_accel_table && TranslateAcceleratorW(m_window, s_accel_table, &msg)) {
+        continue;
+      }
       TranslateMessage(&msg);
       DispatchMessageW(&msg);
     }
@@ -4374,6 +4393,11 @@ private:
   bool m_owns_window{};
 };
 
+// Lune extension: out-of-class definition for the accelerator-table slot
+// declared in win32_edge_engine. Single-header builds compile this header
+// into exactly one TU, so a plain definition is safe.
+HACCEL win32_edge_engine::s_accel_table = nullptr;
+
 } // namespace detail
 
 using browser_engine = detail::win32_edge_engine;
@@ -4562,6 +4586,17 @@ WEBVIEW_API webview_error_t webview_return(webview_t w, const char *id,
 
 WEBVIEW_API const webview_version_info_t *webview_version(void) {
   return &webview::detail::library_version_info;
+}
+
+WEBVIEW_API webview_error_t webview_set_accel(webview_t w, void *haccel) {
+  (void)w;
+#ifdef _WIN32
+  webview::detail::win32_edge_engine::s_accel_table =
+      static_cast<HACCEL>(haccel);
+#else
+  (void)haccel;
+#endif
+  return WEBVIEW_ERROR_OK;
 }
 
 #endif /* WEBVIEW_HEADER */
