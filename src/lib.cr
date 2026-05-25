@@ -106,6 +106,13 @@ module Webview
     # cross-platform. Caller retains ownership of the HACCEL.
     fun set_accel = webview_set_accel(w : T, haccel : Void*) : Error
 
+    # Lune extension. Override the HWND that the AcceleratorKeyPressed
+    # handler dispatches WM_COMMAND to. Defaults to the wv's own
+    # top-level window. Pass another HWND so a child-window webview
+    # routes menu shortcuts back to the main window's wndproc.
+    # Pass nil to restore the default. No-op on non-Win32.
+    fun set_accel_target = webview_set_accel_target(w : T, hwnd : Void*) : Error
+
     # Lune extension. Toggle WV2's built-in browser accelerators
     # (Ctrl+P / Ctrl+F / Ctrl+R / Ctrl+- / etc.). Default is TRUE — WV2
     # grabs these for its own UI. Pass FALSE so the keystrokes bubble up

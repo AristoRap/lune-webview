@@ -180,6 +180,18 @@ wv.set_accel(nil)    # clear
 
 Caller retains ownership of the `HACCEL` (call `DestroyAcceleratorTable` when done). The Crystal call is a no-op on macOS / Linux so cross-platform code can call it unconditionally. Pairs with `set_browser_accelerator_keys_enabled(false)` below to fully suppress WV2's built-in Ctrl+P / Ctrl+F / Ctrl+R defaults.
 
+### `set_accel_target` — re-route `WM_COMMAND` to another window
+
+By default the `AcceleratorKeyPressed` handler dispatches `WM_COMMAND` to the webview's own top-level window (`m_window`). For a multi-window app where the main window owns the menu and command handlers, child-window webviews can call this to point their accelerators back at the main window's `HWND` — keystrokes hit the same wndproc/handler set regardless of which window has focus.
+
+```crystal
+child_wv.set_accel_target(main_hwnd) # route to main
+child_wv.set_accel(haccel)           # install the same table
+child_wv.set_accel_target(nil)       # restore default (route to self)
+```
+
+Idempotent and cheap; combine with `set_accel` (the handler reads both `s_accel_table` and the per-instance target). No-op on non-Win32.
+
 ### `set_browser_accelerator_keys_enabled` — suppress WV2 browser shortcuts
 
 Toggles WebView2's built-in browser accelerators (`Ctrl+P` / `Ctrl+F` / `Ctrl+R` / `Ctrl+-` / `Ctrl+0` / etc.). Default is `true` — WV2 handles these for its own UI (print dialog, find bar, reload). Setting it to `false` lets the keystrokes bubble up to the message pump, where `set_accel`'s `HACCEL` can dispatch them to the embedder's menu.

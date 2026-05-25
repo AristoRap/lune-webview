@@ -429,6 +429,16 @@ WEBVIEW_API const webview_version_info_t *webview_version(void);
 WEBVIEW_API webview_error_t webview_set_accel(webview_t w, void *haccel);
 
 /**
+ * Lune extension. Override the HWND that the AcceleratorKeyPressed
+ * handler dispatches `WM_COMMAND` to when an accelerator matches.
+ * Default is the wv's own top-level window. Set to a different HWND
+ * (e.g. the main app window) so a child-window webview routes menu
+ * shortcuts back to the main window's wndproc + command handlers.
+ * Pass `NULL` to restore the default. No-op on non-Win32 builds.
+ */
+WEBVIEW_API webview_error_t webview_set_accel_target(webview_t w, void *hwnd);
+
+/**
  * Lune extension. Toggle WebView2's built-in browser accelerators
  * (Ctrl+P / Ctrl+F / Ctrl+R / Ctrl+- / Ctrl+0 / etc.). When TRUE
  * (the default), WV2 grabs these keystrokes for its own UI (print
@@ -4138,9 +4148,14 @@ public:
     HRESULT STDMETHODCALLTYPE Invoke(
         ICoreWebView2Controller * /*sender*/,
         ICoreWebView2AcceleratorKeyPressedEventArgs *args) override {
-      if (!args || !m_engine || !s_accel_table || !m_engine->m_window) {
-        return S_OK;
-      }
+      if (!args || !m_engine || !s_accel_table) return S_OK;
+      // Dispatch target is the embedder-set m_accel_target if non-null
+      // (used for child windows that want their menu shortcuts to fire
+      // on the main window's wndproc), else our own m_window.
+      HWND target = m_engine->m_accel_target
+                        ? m_engine->m_accel_target
+                        : m_engine->m_window;
+      if (!target) return S_OK;
       COREWEBVIEW2_KEY_EVENT_KIND kind;
       if (FAILED(args->get_KeyEventKind(&kind))) return S_OK;
       if (kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN &&
@@ -4154,13 +4169,13 @@ public:
       // Matching is driven by wParam (the VK) and GetKeyState for the
       // modifier flags — lParam isn't consulted, so 0 is fine.
       MSG msg{};
-      msg.hwnd = m_engine->m_window;
+      msg.hwnd = target;
       msg.message = (kind == COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN)
                         ? WM_SYSKEYDOWN
                         : WM_KEYDOWN;
       msg.wParam = vk;
       msg.lParam = 0;
-      if (TranslateAcceleratorW(m_engine->m_window, s_accel_table, &msg)) {
+      if (TranslateAcceleratorW(target, s_accel_table, &msg)) {
         args->put_Handled(TRUE);
       }
       return S_OK;
@@ -4170,6 +4185,18 @@ public:
     std::atomic<ULONG> m_ref{1};
     win32_edge_engine *m_engine;
   };
+
+  // Override the HWND that the AcceleratorKeyPressed handler dispatches
+  // WM_COMMAND to when TranslateAcceleratorW matches. Default is this
+  // instance's m_window. Set to a different HWND (e.g. the main app
+  // window) so a child-window webview routes menu shortcuts back to
+  // the main window's wndproc + command handlers. Pass nullptr to
+  // restore the default. Returns noresult so the C ABI wrapper can
+  // route through api_filter the same way the other setters do.
+  noresult set_accel_target(HWND hwnd) {
+    m_accel_target = hwnd;
+    return {};
+  }
 
   // Toggle WV2's built-in browser accelerators (Ctrl+P / Ctrl+F /
   // Ctrl+R / Ctrl+0 / Ctrl+- / etc.). Default is TRUE — WV2 grabs
@@ -4523,6 +4550,11 @@ private:
   mswebview2::loader m_webview2_loader;
   int m_dpi{};
   bool m_owns_window{};
+  // Optional embedder-set HWND to dispatch WM_COMMAND to when the
+  // AcceleratorKeyPressed handler matches the shared s_accel_table.
+  // Lets a child-window webview route menu shortcuts back to the main
+  // window's wndproc + command handlers. Null = use our own m_window.
+  HWND m_accel_target = nullptr;
 };
 
 // Lune extension: out-of-class definition for the accelerator-table slot
@@ -4729,6 +4761,19 @@ WEBVIEW_API webview_error_t webview_set_accel(webview_t w, void *haccel) {
   (void)haccel;
 #endif
   return WEBVIEW_ERROR_OK;
+}
+
+WEBVIEW_API webview_error_t webview_set_accel_target(webview_t w, void *hwnd) {
+#ifdef _WIN32
+  using namespace webview::detail;
+  return api_filter([=] {
+    return cast_to_webview(w)->set_accel_target(static_cast<HWND>(hwnd));
+  });
+#else
+  (void)w;
+  (void)hwnd;
+  return WEBVIEW_ERROR_OK;
+#endif
 }
 
 WEBVIEW_API webview_error_t

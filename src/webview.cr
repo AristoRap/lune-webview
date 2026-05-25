@@ -271,6 +271,15 @@ module Webview
       check_error(LibWebView.set_accel(@w, haccel || Pointer(Void).null))
     end
 
+    # Override the HWND that the AcceleratorKeyPressed handler dispatches
+    # `WM_COMMAND` to. Defaults to the wv's own top-level window. Set to
+    # the main app's HWND for a child-window webview so menu shortcuts
+    # route back to the main wndproc + command handlers. Pass `nil` to
+    # restore the default. No-op on non-Win32 builds.
+    def set_accel_target(hwnd : Pointer(Void)?)
+      check_error(LibWebView.set_accel_target(@w, hwnd || Pointer(Void).null))
+    end
+
     # Toggle WV2's built-in browser accelerators (Ctrl+P / Ctrl+F /
     # Ctrl+R / Ctrl+- / Ctrl+0 / etc.). Default is `true` — WV2 grabs
     # these keystrokes for its own UI (print dialog, find bar, reload).
