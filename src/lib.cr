@@ -101,6 +101,11 @@ module Webview
     # @since 0.10
     fun version = webview_version : WebviewVersionInfo*
 
+    # Lune extension. Install a Win32 HACCEL on the message pump; pass nil
+    # to clear. No-op on non-Win32 builds, so the same call site is safe
+    # cross-platform. Caller retains ownership of the HACCEL.
+    fun set_accel = webview_set_accel(w : T, haccel : Void*) : Error
+
     # Holds the library's version information.
     struct WebviewVersionInfo
       # The elements of the version number.
