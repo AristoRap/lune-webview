@@ -271,6 +271,16 @@ module Webview
       check_error(LibWebView.set_accel(@w, haccel || Pointer(Void).null))
     end
 
+    # Toggle WV2's built-in browser accelerators (Ctrl+P / Ctrl+F /
+    # Ctrl+R / Ctrl+- / Ctrl+0 / etc.). Default is `true` — WV2 grabs
+    # these keystrokes for its own UI (print dialog, find bar, reload).
+    # Pass `false` so they bubble up to the message pump where
+    # `set_accel`'s HACCEL can dispatch them to the embedder's menu.
+    # No-op on non-Win32 builds.
+    def set_browser_accelerator_keys_enabled(enabled : Bool)
+      check_error(LibWebView.set_browser_accelerator_keys_enabled(@w, enabled ? 1 : 0))
+    end
+
     # Type-safe binding for 1 parameter
     def bind_typed(name : String, t1 : T1.class, &block : T1 -> R) forall T1, R
       bind(name, JSProc.new { |args|

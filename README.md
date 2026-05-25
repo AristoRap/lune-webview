@@ -177,6 +177,18 @@ wv.set_accel(nil)    # clear
 
 Caller retains ownership of the `HACCEL` (call `DestroyAcceleratorTable` when done). The Crystal call is a no-op on macOS / Linux so cross-platform code can call it unconditionally.
 
+### `set_browser_accelerator_keys_enabled` — suppress WV2 browser shortcuts
+
+Toggles WebView2's built-in browser accelerators (`Ctrl+P` / `Ctrl+F` / `Ctrl+R` / `Ctrl+-` / `Ctrl+0` / etc.). Default is `true` — WV2 handles these for its own UI (print dialog, find bar, reload). Setting it to `false` lets the keystrokes bubble up to the message pump, where `set_accel`'s `HACCEL` can dispatch them to the embedder's menu.
+
+```crystal
+wv.set_browser_accelerator_keys_enabled(false)
+```
+
+Routes through `ICoreWebView2Settings3::put_AreBrowserAcceleratorKeysEnabled`; needs WV2 to be ready, so call after the controller is created (typically right after `Webview.with_window`/`Webview.new`). No-op on non-Win32 builds.
+
+This is the necessary companion to `set_accel`: without suppressing WV2's defaults, WV2 processes shortcuts like `Ctrl+P` in its own pipeline before `TranslateAcceleratorW` ever sees them, and the menu-routed `HACCEL` never fires.
+
 ### `Webview::WebviewLike` — protocol for spec testability
 
 A small abstract module that `Webview::Webview` natively includes. Lets downstream consumers (e.g. a bridge layer) type their parameters against the protocol so spec fakes can be stubbed without spinning up a real webview (with its C state, message pump, and platform window).

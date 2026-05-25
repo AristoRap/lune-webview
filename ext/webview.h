@@ -428,6 +428,19 @@ WEBVIEW_API const webview_version_info_t *webview_version(void);
  */
 WEBVIEW_API webview_error_t webview_set_accel(webview_t w, void *haccel);
 
+/**
+ * Lune extension. Toggle WebView2's built-in browser accelerators
+ * (Ctrl+P / Ctrl+F / Ctrl+R / Ctrl+- / Ctrl+0 / etc.). When TRUE
+ * (the default), WV2 grabs these keystrokes for its own UI (print
+ * dialog, find bar, reload). Set to FALSE so the keystrokes bubble
+ * up to the message loop where TranslateAcceleratorW can dispatch
+ * them to the embedder's menu.
+ *
+ * Routes through ICoreWebView2Settings3::put_AreBrowserAcceleratorKeysEnabled.
+ * No-op on non-Win32 builds.
+ */
+WEBVIEW_API webview_error_t webview_set_browser_accelerator_keys_enabled(webview_t w, int enabled);
+
 #ifdef __cplusplus
 }
 
@@ -4085,6 +4098,39 @@ public:
   // without needing a friend declaration or wrapper.
   static HACCEL s_accel_table;
 
+  // Toggle WV2's built-in browser accelerators (Ctrl+P / Ctrl+F /
+  // Ctrl+R / Ctrl+0 / Ctrl+- / etc.). Default is TRUE — WV2 grabs
+  // the keystroke for its own UI. Setting FALSE lets the keystroke
+  // bubble up to the message loop where TranslateAcceleratorW (and
+  // s_accel_table) can dispatch it to the embedder's menu.
+  // Returns WEBVIEW_ERROR_INVALID_STATE if called before WV2 is ready.
+  noresult set_browser_accelerator_keys_enabled(bool enabled) {
+    if (!m_webview) {
+      return error_info{WEBVIEW_ERROR_INVALID_STATE};
+    }
+    ICoreWebView2Settings *settings = nullptr;
+    if (m_webview->get_Settings(&settings) != S_OK || !settings) {
+      return error_info{WEBVIEW_ERROR_UNSPECIFIED, "get_Settings failed"};
+    }
+    ICoreWebView2Settings3 *settings3 = nullptr;
+    HRESULT qi = settings->QueryInterface(
+        __uuidof(ICoreWebView2Settings3),
+        reinterpret_cast<void **>(&settings3));
+    settings->Release();
+    if (qi != S_OK || !settings3) {
+      return error_info{WEBVIEW_ERROR_MISSING_DEPENDENCY,
+                        "ICoreWebView2Settings3 unavailable"};
+    }
+    HRESULT res = settings3->put_AreBrowserAcceleratorKeysEnabled(
+        enabled ? TRUE : FALSE);
+    settings3->Release();
+    if (res != S_OK) {
+      return error_info{WEBVIEW_ERROR_UNSPECIFIED,
+                        "put_AreBrowserAcceleratorKeysEnabled failed"};
+    }
+    return {};
+  }
+
 protected:
   noresult run_impl() override {
     MSG msg;
@@ -4600,6 +4646,21 @@ WEBVIEW_API webview_error_t webview_set_accel(webview_t w, void *haccel) {
   (void)haccel;
 #endif
   return WEBVIEW_ERROR_OK;
+}
+
+WEBVIEW_API webview_error_t
+webview_set_browser_accelerator_keys_enabled(webview_t w, int enabled) {
+#ifdef _WIN32
+  using namespace webview::detail;
+  return api_filter([=] {
+    return cast_to_webview(w)->set_browser_accelerator_keys_enabled(
+        enabled != 0);
+  });
+#else
+  (void)w;
+  (void)enabled;
+  return WEBVIEW_ERROR_OK;
+#endif
 }
 
 #endif /* WEBVIEW_HEADER */

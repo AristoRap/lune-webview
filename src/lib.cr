@@ -106,6 +106,13 @@ module Webview
     # cross-platform. Caller retains ownership of the HACCEL.
     fun set_accel = webview_set_accel(w : T, haccel : Void*) : Error
 
+    # Lune extension. Toggle WV2's built-in browser accelerators
+    # (Ctrl+P / Ctrl+F / Ctrl+R / Ctrl+- / etc.). Default is TRUE — WV2
+    # grabs these for its own UI. Pass FALSE so the keystrokes bubble up
+    # to the message pump where set_accel's HACCEL can dispatch them.
+    # No-op on non-Win32 builds.
+    fun set_browser_accelerator_keys_enabled = webview_set_browser_accelerator_keys_enabled(w : T, enabled : LibC::Int) : Error
+
     # Holds the library's version information.
     struct WebviewVersionInfo
       # The elements of the version number.
