@@ -31,6 +31,8 @@ endif
 %.o: %.cc
 	$(CXX) -c -o $@ $(CXXFLAGS) $<
 
+$(obj_file): ext/webview.h
+
 .PHONY: clean
 clean:
 	rm -f $(obj_file)

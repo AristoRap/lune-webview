@@ -2188,6 +2188,13 @@ inline id autoreleased(id object) {
 
 enum NSBackingStoreType : NSUInteger { NSBackingStoreBuffered = 2 };
 
+enum NSAutoresizingMaskOptions : NSUInteger {
+  NSViewWidthSizable = 2,
+  NSViewMaxXMargin = 4,
+  NSViewHeightSizable = 16,
+  NSViewMaxYMargin = 32
+};
+
 enum NSWindowStyleMask : NSUInteger {
   NSWindowStyleMaskTitled = 1,
   NSWindowStyleMaskClosable = 2,
@@ -2287,11 +2294,15 @@ public:
           objc::msg_send<void>(m_webview, "setUIDelegate:"_sel, nullptr);
           objc::msg_send<void>(ui_delegate, "release"_sel);
         }
-        if (m_webview == objc::msg_send<id>(m_window, "contentView"_sel)) {
-          objc::msg_send<void>(m_window, "setContentView:"_sel, nullptr);
-        }
         objc::msg_send<void>(m_webview, "release"_sel);
         m_webview = nullptr;
+      }
+      if (m_widget) {
+        if (m_widget == objc::msg_send<id>(m_window, "contentView"_sel)) {
+          objc::msg_send<void>(m_window, "setContentView:"_sel, nullptr);
+        }
+        objc::msg_send<void>(m_widget, "release"_sel);
+        m_widget = nullptr;
       }
       if (m_owns_window) {
         // Replace delegate to avoid callbacks and other bad things during
@@ -2640,6 +2651,10 @@ private:
   }
   void on_window_will_close(id /*delegate*/, id /*window*/) {
     // Widget destroyed along with window.
+    if (m_widget) {
+      objc::msg_send<void>(m_widget, "release"_sel);
+      m_widget = nullptr;
+    }
     m_webview = nullptr;
     m_window = nullptr;
     dispatch([this] { on_window_destroyed(); });
@@ -2665,7 +2680,13 @@ private:
 
     set_up_web_view();
 
-    objc::msg_send<void>(m_window, "setContentView:"_sel, m_webview);
+    // The inspector is a sibling of the webview, so both need a container.
+    m_widget = objc::msg_send<id>("NSView"_cls, "alloc"_sel);
+    m_widget = objc::msg_send<id>(m_widget, "initWithFrame:"_sel,
+                                 CGRectMake(0, 0, 0, 0));
+    objc::msg_send<void>(m_widget, "setAutoresizesSubviews:"_sel, YES);
+    objc::msg_send<void>(m_widget, "addSubview:"_sel, m_webview);
+    objc::msg_send<void>(m_window, "setContentView:"_sel, m_widget);
 
     if (m_owns_window) {
       objc::msg_send<void>(m_window, "makeKeyAndOrderFront:"_sel, nullptr);
@@ -2709,6 +2730,12 @@ private:
     auto ui_delegate = create_webkit_ui_delegate();
     objc::msg_send<void>(m_webview, "initWithFrame:configuration:"_sel,
                          CGRectMake(0, 0, 0, 0), config);
+    // Keep the inspected page in bounds when the docked inspector resizes.
+    auto autoresizing_mask = static_cast<NSAutoresizingMaskOptions>(
+        NSViewWidthSizable | NSViewMaxXMargin | NSViewHeightSizable |
+        NSViewMaxYMargin);
+    objc::msg_send<void>(m_webview, "setAutoresizingMask:"_sel,
+                         autoresizing_mask);
     objc_setAssociatedObject(ui_delegate, "webview", (id)this,
                              OBJC_ASSOCIATION_ASSIGN);
     objc::msg_send<void>(m_webview, "setUIDelegate:"_sel, ui_delegate);
@@ -2803,6 +2830,7 @@ private:
   id m_app_delegate{};
   id m_window_delegate{};
   id m_window{};
+  id m_widget{};
   id m_webview{};
   id m_manager{};
   bool m_owns_window{};
