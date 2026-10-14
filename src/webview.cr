@@ -70,13 +70,37 @@ module Webview
     @@bindings_lock = Mutex.new
 
     # Lifecycle event callbacks
+    property on_document_replaced : Proc(Nil)?
+    property on_close : Proc(Nil)?
+    @lifecycle_context : Pointer(Void)?
+    @destroyed = false
+
     property on_load : Proc(Nil)?
     property on_navigate : Proc(String, Nil)?
 
     def initialize(debug, title)
       @w = LibWebView.create(debug ? 1 : 0, nil)
       check_error(LibWebView.set_title(@w, title))
+      install_native_lifecycle
       setup_lifecycle_hooks
+    end
+
+    private def install_native_lifecycle : Nil
+      boxed = Box.box(self)
+      @lifecycle_context = boxed
+      check_error LibWebView.set_lifecycle_callback(@w, ->(event, data) {
+        begin
+          window = Box(Webview).unbox(data)
+          case event
+          when LibWebView::LifecycleEvent::DocumentReplaced
+            window.on_document_replaced.try &.call
+          when LibWebView::LifecycleEvent::Closed
+            window.on_close.try &.call
+          end
+        rescue ex
+          STDERR.puts "Webview lifecycle: #{ex.message}"
+        end
+      }, boxed)
     end
 
     # Setup internal lifecycle hooks for page events
@@ -107,7 +131,12 @@ module Webview
 
     # destroys a WebView and closes the native window.
     def destroy
+      return if @destroyed
+      @destroyed = true
       check_error(LibWebView.destroy(@w))
+      @lifecycle_context = nil
+      @on_document_replaced = nil
+      @on_close = nil
     end
 
     # Terminate stops the main loop. It is safe to call this function from

@@ -246,6 +246,14 @@ WEBVIEW_API webview_t webview_create(int debug, void *window);
  */
 WEBVIEW_API webview_error_t webview_destroy(webview_t w);
 
+// UI-thread notifications. Document replacement is a committed main-frame load;
+// same-document, cancelled provisional, and subframe navigation are excluded.
+typedef enum { WEBVIEW_DOCUMENT_REPLACED = 0, WEBVIEW_CLOSED = 1 } webview_lifecycle_event_t;
+typedef void (*webview_lifecycle_callback_t)(webview_lifecycle_event_t, void *);
+WEBVIEW_API webview_error_t webview_set_lifecycle_callback(webview_t w, webview_lifecycle_callback_t callback, void *context);
+WEBVIEW_API webview_error_t webview_clear_lifecycle_callback(webview_t w);
+
+
 /**
  * Runs the main loop until it's terminated.
  *
@@ -1256,6 +1264,23 @@ class engine_base {
 public:
   virtual ~engine_base() = default;
 
+  noresult set_lifecycle_callback(webview_lifecycle_callback_t callback, void *context) {
+    m_lifecycle_callback = callback;
+    m_lifecycle_context = context;
+    return {};
+  }
+  void notify_lifecycle(webview_lifecycle_event_t event) {
+    if (m_lifecycle_closed) return;
+    if (event == WEBVIEW_CLOSED) m_lifecycle_closed = true;
+    if (m_lifecycle_callback) m_lifecycle_callback(event, m_lifecycle_context);
+  }
+private:
+  webview_lifecycle_callback_t m_lifecycle_callback = nullptr;
+  void *m_lifecycle_context = nullptr;
+  bool m_lifecycle_closed = false;
+public:
+
+
   noresult navigate(const std::string &url) {
     if (url.empty()) {
       return navigate_impl("about:blank");
@@ -1893,6 +1918,7 @@ public:
       on_window_created();
       auto on_window_destroy = +[](GtkWidget *, gpointer arg) {
         auto *w = static_cast<gtk_webkit_engine *>(arg);
+        w->notify_lifecycle(WEBVIEW_CLOSED);
         w->m_window = nullptr;
         w->on_window_destroyed();
       };
@@ -1902,6 +1928,10 @@ public:
     webkit_dmabuf::apply_webkit_dmabuf_workaround();
     // Initialize webview widget
     m_webview = webkit_web_view_new();
+    g_signal_connect(m_webview, "load-changed", G_CALLBACK(+[](WebKitWebView *, WebKitLoadEvent event, gpointer data) {
+      if (event == WEBKIT_LOAD_COMMITTED)
+        static_cast<gtk_webkit_engine *>(data)->notify_lifecycle(WEBVIEW_DOCUMENT_REPLACED);
+    }), this);
     g_object_ref_sink(m_webview);
     WebKitUserContentManager *manager = m_user_content_manager =
         webkit_web_view_get_user_content_manager(WEBKIT_WEB_VIEW(m_webview));
@@ -2287,6 +2317,7 @@ public:
 
   virtual ~cocoa_wkwebview_engine() {
     objc::autoreleasepool arp;
+    detach_navigation_delegate();
     if (m_window) {
       if (m_webview) {
         if (auto ui_delegate =
@@ -2529,6 +2560,28 @@ private:
                              OBJC_ASSOCIATION_ASSIGN);
     return instance;
   }
+  void detach_navigation_delegate() {
+    if (m_webview) objc::msg_send<void>(m_webview, "setNavigationDelegate:"_sel, nullptr);
+    if (m_navigation_delegate) {
+      objc::msg_send<void>(m_navigation_delegate, "release"_sel);
+      m_navigation_delegate = nullptr;
+    }
+  }
+  id create_navigation_delegate() {
+    auto cls = objc_lookUpClass("WebviewWKNavigationDelegate");
+    if (!cls) {
+      cls = objc_allocateClassPair((Class) "NSObject"_cls, "WebviewWKNavigationDelegate", 0);
+      class_addProtocol(cls, objc_getProtocol("WKNavigationDelegate"));
+      class_addMethod(cls, "webView:didCommitNavigation:"_sel,
+        (IMP)(+[](id self, SEL, id, id) {
+          get_associated_webview(self)->notify_lifecycle(WEBVIEW_DOCUMENT_REPLACED);
+        }), "v@:@@");
+      objc_registerClassPair(cls);
+    }
+    auto delegate = objc::msg_send<id>((id)cls, "new"_sel);
+    objc_setAssociatedObject(delegate, "webview", (id)this, OBJC_ASSOCIATION_ASSIGN);
+    return delegate;
+  }
   static id create_webkit_ui_delegate() {
     objc::autoreleasepool arp;
     constexpr auto class_name = "WebviewWKUIDelegate";
@@ -2650,6 +2703,8 @@ private:
     set_up_window();
   }
   void on_window_will_close(id /*delegate*/, id /*window*/) {
+    notify_lifecycle(WEBVIEW_CLOSED);
+    detach_navigation_delegate();
     // Widget destroyed along with window.
     if (m_widget) {
       objc::msg_send<void>(m_widget, "release"_sel);
@@ -2727,6 +2782,7 @@ private:
     objc::msg_send<id>(preferences, "setValue:forKey:"_sel, yes_value,
                        "DOMPasteAllowed"_str);
 
+    m_navigation_delegate = create_navigation_delegate();
     auto ui_delegate = create_webkit_ui_delegate();
     objc::msg_send<void>(m_webview, "initWithFrame:configuration:"_sel,
                          CGRectMake(0, 0, 0, 0), config);
@@ -2739,6 +2795,7 @@ private:
     objc_setAssociatedObject(ui_delegate, "webview", (id)this,
                              OBJC_ASSOCIATION_ASSIGN);
     objc::msg_send<void>(m_webview, "setUIDelegate:"_sel, ui_delegate);
+    objc::msg_send<void>(m_webview, "setNavigationDelegate:"_sel, m_navigation_delegate);
 
     if (m_debug) {
       // Explicitly make WKWebView inspectable via Safari on OS versions that
@@ -2829,6 +2886,7 @@ private:
   bool m_debug{};
   id m_app_delegate{};
   id m_window_delegate{};
+  id m_navigation_delegate{};
   id m_window{};
   id m_widget{};
   id m_webview{};
@@ -3905,9 +3963,11 @@ public:
           w->resize_widget();
           break;
         case WM_CLOSE:
+          w->notify_lifecycle(WEBVIEW_CLOSED);
           DestroyWindow(hwnd);
           break;
         case WM_DESTROY:
+          w->notify_lifecycle(WEBVIEW_CLOSED);
           w->m_window = nullptr;
           SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
           w->on_window_destroyed();
@@ -4146,6 +4206,34 @@ public:
   // doesn't act on the keystroke (e.g. open its print dialog).
   // Companion to set_accel; together they cover both focus cases
   // (m_window focused → run_impl; WV2 focused → this event).
+  class content_loading_handler : public ICoreWebView2ContentLoadingEventHandler {
+  public:
+    explicit content_loading_handler(win32_edge_engine *engine) : m_engine(engine) {}
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++m_ref; }
+    ULONG STDMETHODCALLTYPE Release() override {
+      if (--m_ref) return m_ref;
+      delete this;
+      return 0;
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) override {
+      if (!ppv) return E_POINTER;
+      *ppv = nullptr;
+      if (IsEqualIID(riid, __uuidof(IUnknown)) || IsEqualIID(riid, __uuidof(ICoreWebView2ContentLoadingEventHandler))) {
+        *ppv = static_cast<ICoreWebView2ContentLoadingEventHandler *>(this);
+        AddRef();
+        return S_OK;
+      }
+      return E_NOINTERFACE;
+    }
+    HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2 *, ICoreWebView2ContentLoadingEventArgs *) override {
+      m_engine->notify_lifecycle(WEBVIEW_DOCUMENT_REPLACED);
+      return S_OK;
+    }
+  private:
+    ULONG m_ref = 1;
+    win32_edge_engine *m_engine;
+  };
+
   class accelerator_key_handler
       : public ICoreWebView2AcceleratorKeyPressedEventHandler {
   public:
@@ -4459,6 +4547,13 @@ private:
       return error_info{WEBVIEW_ERROR_UNSPECIFIED,
                         "put_IsStatusBarEnabled failed"};
     }
+    {
+      auto *handler = new content_loading_handler(this);
+      EventRegistrationToken token{};
+      auto hr = m_webview->add_ContentLoading(handler, &token);
+      handler->Release();
+      if (FAILED(hr)) return error_info{WEBVIEW_ERROR_UNSPECIFIED, "ContentLoading subscription failed"};
+    }
     // Subscribe to AcceleratorKeyPressed so menu shortcuts fire even
     // when WV2 has keyboard focus (WM_KEYDOWN never reaches our
     // GetMessageW pump in that case — WV2 has its own input pipeline).
@@ -4631,9 +4726,18 @@ WEBVIEW_API webview_t webview_create(int debug, void *wnd) {
 WEBVIEW_API webview_error_t webview_destroy(webview_t w) {
   using namespace webview::detail;
   return api_filter([=]() -> webview::noresult {
+    cast_to_webview(w)->notify_lifecycle(WEBVIEW_CLOSED);
     delete cast_to_webview(w);
     return {};
   });
+}
+
+WEBVIEW_API webview_error_t webview_set_lifecycle_callback(webview_t w, webview_lifecycle_callback_t callback, void *context) {
+  using namespace webview::detail;
+  return api_filter([=] { return cast_to_webview(w)->set_lifecycle_callback(callback, context); });
+}
+WEBVIEW_API webview_error_t webview_clear_lifecycle_callback(webview_t w) {
+  return webview_set_lifecycle_callback(w, nullptr, nullptr);
 }
 
 WEBVIEW_API webview_error_t webview_run(webview_t w) {

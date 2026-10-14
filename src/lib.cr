@@ -22,6 +22,15 @@ module Webview
   lib LibWebView
     alias T = Void*
 
+    enum LifecycleEvent
+      DocumentReplaced
+      Closed
+    end
+
+    alias LifecycleCallback = (LifecycleEvent, Void* -> Void)
+    fun set_lifecycle_callback = webview_set_lifecycle_callback(w : T, callback : LifecycleCallback, context : Void*) : Error
+    fun clear_lifecycle_callback = webview_clear_lifecycle_callback(w : T) : Error
+
     # Error codes returned by webview functions
     enum Error : LibC::Int
       MISSING_DEPENDENCY = -5 # Missing dependency
